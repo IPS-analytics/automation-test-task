@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+.DS_Store
+**/supabase/.branches/
+**/supabase/.temp/
+**/supabase/signing_keys.json
+*.pem
+*.key
+.npmrc

@@ -1,0 +1,135 @@
+{
+  "name": "Telegram: меню услуг из Google Sheets",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Меню услуг из Google Sheets\n1. **Telegram Trigger** — принимает `/start` и нажатия inline-кнопок.\n2. **Read services** — на каждый апдейт заново читает лист `services` (id, name, active).\n3. **Build replies** — оставляет активные услуги и собирает тело запроса с `inline_keyboard`; при нажатии ищет услугу по ID.\n4. **Telegram Bot API** — отправляет `sendMessage` / `answerCallbackQuery`.\n\n**Перед запуском:** выбрать credentials Telegram и Google Sheets, указать ссылку на таблицу в «Read services», вставить токен бота вместо `YOUR_BOT_TOKEN` в URL узла «Telegram Bot API».",
+        "height": 300,
+        "width": 520,
+        "color": 7
+      },
+      "id": "6f0c1a52-2b7e-4c1d-9a51-0d3c8e1f7a01",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -60,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message",
+          "callback_query"
+        ],
+        "additionalFields": {}
+      },
+      "id": "0b8e4f6a-3c21-4d7e-8f90-1a2b3c4d5e01",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "9d3f2c1b-7a6e-4b5d-8c9f-0e1d2c3b4a51"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "https://docs.google.com/spreadsheets/d/YOUR_SPREADSHEET_ID/edit"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "services"
+        },
+        "options": {}
+      },
+      "id": "0b8e4f6a-3c21-4d7e-8f90-1a2b3c4d5e02",
+      "name": "Read services",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        240,
+        0
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Строит запросы к Telegram Bot API по свежим строкам листа «services».\n// Вход: строки таблицы (id, name, active) и апдейт из узла «Telegram Trigger».\n// Выход: элементы { method, payload } — их отправляет узел «Telegram Bot API».\n\nconst PREFIX = 'svc:';          // callback_data = 'svc:<id>'\nconst MAX_CALLBACK_BYTES = 64;  // лимит Telegram для callback_data\nconst MAX_BUTTONS = 100;        // лимит Telegram для inline-клавиатуры\n\nconst update = $('Telegram Trigger').first().json;\n\n// Заголовки сравниваем без учёта регистра и пробелов: «ID», « Name » и т. п.\nconst field = (row, name) => {\n  const key = Object.keys(row).find((k) => k.trim().toLowerCase() === name);\n  return key === undefined ? '' : String(row[key] ?? '').trim();\n};\nconst byteLength = (s) => encodeURIComponent(s).replace(/%[0-9A-F]{2}/g, '_').length;\n\n// Пустые строки и строки без ID или названия пропускаем.\nconst services = $input.all()\n  .map(({ json }) => ({\n    id: field(json, 'id'),\n    name: field(json, 'name'),\n    active: ['true', '1', 'yes', 'да'].includes(field(json, 'active').toLowerCase()),\n  }))\n  .filter((s) => s.id && s.name);\n\nconst send = (chatId, text, extra = {}) => ({\n  method: 'sendMessage',\n  payload: { chat_id: chatId, text, ...extra },\n});\n\nconst requests = [];\n\nif (update.callback_query) {\n  // Нажатие кнопки: ищем услугу по ID в актуальной таблице, а не по тексту кнопки.\n  const query = update.callback_query;\n  const data = String(query.data ?? '');\n  if (data.startsWith(PREFIX)) {\n    const service = services.find((s) => s.active && s.id === data.slice(PREFIX.length));\n    const chatId = query.message?.chat?.id ?? query.from.id;\n    requests.push(send(chatId, service\n      ? `Вы выбрали услугу: ${service.name}`\n      : 'Эта услуга больше недоступна. Отправьте /start, чтобы обновить меню.'));\n  }\n  // Ответ на callback убирает индикатор загрузки на кнопке.\n  requests.push({ method: 'answerCallbackQuery', payload: { callback_query_id: query.id } });\n} else if (update.message) {\n  const chatId = update.message.chat.id;\n  if (/^\\/start(@\\w+)?(\\s|$)/.test(update.message.text ?? '')) {\n    const active = services.filter((s) => s.active);\n    const buttons = active\n      .filter((s, i) => active.findIndex((x) => x.id === s.id) === i) // дубли ID — по первой строке\n      .filter((s) => byteLength(PREFIX + s.id) <= MAX_CALLBACK_BYTES)\n      .slice(0, MAX_BUTTONS)\n      .map((s) => [{ text: s.name, callback_data: PREFIX + s.id }]);\n    requests.push(buttons.length\n      ? send(chatId, 'Выберите услугу:', { reply_markup: { inline_keyboard: buttons } })\n      : send(chatId, 'Сейчас нет доступных услуг. Загляните позже.'));\n  } else {\n    requests.push(send(chatId, 'Отправьте /start, чтобы открыть меню услуг.'));\n  }\n}\n\nreturn requests.map((json) => ({ json }));\n"
+      },
+      "id": "0b8e4f6a-3c21-4d7e-8f90-1a2b3c4d5e03",
+      "name": "Build replies",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/botYOUR_BOT_TOKEN/{{ $json.method }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {}
+      },
+      "id": "0b8e4f6a-3c21-4d7e-8f90-1a2b3c4d5e04",
+      "name": "Telegram Bot API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read services",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read services": {
+      "main": [
+        [
+          {
+            "node": "Build replies",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build replies": {
+      "main": [
+        [
+          {
+            "node": "Telegram Bot API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
